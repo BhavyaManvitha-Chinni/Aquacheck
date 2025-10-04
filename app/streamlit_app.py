@@ -2,34 +2,20 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 import pickle
-import shap
 import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
 
-# -------------------------------
-# Page Config
-# -------------------------------
 st.set_page_config(page_title="AquaCheck", page_icon="💧", layout="wide")
 
-# -------------------------------
-# Main Title / Branding
-# -------------------------------
 st.markdown(
     """
-    <h1 style='text-align: center; color: #2196F3;'>
-        💧 AquaCheck
-    </h1>
-    <h4 style='text-align: center; color: gray;'>
-        AI-Powered Water Potability Analyzer
-    </h4>
+    <h1 style='text-align: center; color: #2196F3;'>💧 AquaCheck</h1>
+    <h4 style='text-align: center; color: gray;'>AI-Powered Water Potability Analyzer</h4>
     <hr style='border:1px solid #ddd;'>
     """,
     unsafe_allow_html=True
 )
 
-# -------------------------------
-# Custom CSS for result cards
-# -------------------------------
 st.markdown(
     """
     <style>
@@ -61,9 +47,6 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-# -------------------------------
-# Constants
-# -------------------------------
 FEATURES = [
     "pH", "Hardness", "Solids", "Chloramines", "Sulfate",
     "Conductivity", "Organic Carbon", "Trihalomethanes", "Turbidity"
@@ -71,40 +54,26 @@ FEATURES = [
 
 WHO_HELP = {
     "pH": "WHO guideline ~6.5–8.5",
-    "Hardness": "Common acceptable up to ~300 mg/L (as CaCO₃)",
-    "Solids": "Total dissolved solids (TDS): desirable < 500 ppm; up to ~1500 ppm acceptable in many contexts (dataset ranges are higher).",
-    "Chloramines": "Residual disinfectant; typical 2–4 ppm for treated water.",
-    "Sulfate": "WHO health-based guideline often ≤ 500 mg/L.",
-    "Conductivity": "Related to TDS; typical drinking water ~50–500 μS/cm.",
-    "Organic Carbon": "Lower is generally better; often < 5–15 ppm.",
-    "Trihalomethanes": "Often recommended < 100 μg/L (varies by region).",
-    "Turbidity": "Desirable < 5 NTU; ideal < 1 NTU."
+    "Hardness": "Acceptable up to ~300 mg/L",
+    "Solids": "Desirable < 500 ppm, up to 1500 ppm",
+    "Chloramines": "Typical 2–4 ppm",
+    "Sulfate": "≤ 500 mg/L",
+    "Conductivity": "50–500 μS/cm typical",
+    "Organic Carbon": "< 5–15 ppm",
+    "Trihalomethanes": "< 100 μg/L",
+    "Turbidity": "< 5 NTU desirable"
 }
 
 SAFE_COLOR = "#4CAF50"
 UNSAFE_COLOR = "#F44336"
 
-# -------------------------------
-# Load models
-# -------------------------------
 @st.cache_resource
-def load_models():
-    calibrated_model = None
-    explain_model = None
+def load_model():
     with open("models/best_model.pkl", "rb") as f:
-        calibrated_model = pickle.load(f)
-    try:
-        with open("models/best_rf.pkl", "rb") as f:
-            explain_model = pickle.load(f)
-    except FileNotFoundError:
-        explain_model = None
-    return calibrated_model, explain_model
+        return pickle.load(f)
 
-model, explain_model = load_models()
+model = load_model()
 
-# -------------------------------
-# Load dataset
-# -------------------------------
 @st.cache_data
 def load_dataset():
     try:
@@ -116,54 +85,23 @@ def load_dataset():
         }
         df = df.rename(columns=rename_map)
         needed = FEATURES + ["Potability"]
-        missing = [c for c in needed if c not in df.columns]
-        if missing:
-            return None
         return df[needed].copy()
-    except Exception:
+    except:
         return None
 
 df_clean = load_dataset()
 
-# -------------------------------
-# Helpers
-# -------------------------------
 def prob_to_risk(prob_safe: float) -> int:
     return int(round(prob_safe * 100))
 
 def predict_proba(input_df: pd.DataFrame) -> float:
-    probs = model.predict_proba(input_df[FEATURES].to_numpy())[0]
-    return float(probs[1])
-
-def shap_local_bar(explain_model, input_df: pd.DataFrame):
-    try:
-        explainer = shap.TreeExplainer(explain_model)
-        shap_values = explainer.shap_values(input_df[FEATURES])
-        if isinstance(shap_values, list):
-            shap_vals = shap_values[1]
-        else:
-            shap_vals = shap_values
-        vals = pd.Series(shap_vals[0], index=FEATURES).sort_values()
-        fig, ax = plt.subplots(figsize=(8, 5))
-        colors = [UNSAFE_COLOR if v < 0 else SAFE_COLOR for v in vals]
-        vals.plot(kind="barh", ax=ax, color=colors)
-        ax.set_title("Feature Contributions for This Prediction (SHAP)")
-        ax.set_xlabel("SHAP value (impact on model output)")
-        legend_elements = [
-            Patch(facecolor=SAFE_COLOR, label="Pushes toward Safe"),
-            Patch(facecolor=UNSAFE_COLOR, label="Pushes toward Unsafe"),
-        ]
-        ax.legend(handles=legend_elements, loc="lower right")
-        st.pyplot(fig)
-    except Exception as e:
-        st.info("⚠️ SHAP explanation not available.")
-        st.caption(f"Details: {e}")
+    return float(model.predict_proba(input_df[FEATURES].to_numpy())[0][1])
 
 def probability_donut(prob_safe: float):
     probs = [prob_safe * 100, (1 - prob_safe) * 100]
     labels = ["Safe", "Unsafe"]
     colors = [SAFE_COLOR, UNSAFE_COLOR]
-    fig, ax = plt.subplots()
+    fig, ax = plt.subplots(figsize=(4, 4))
     ax.pie(
         probs, labels=labels, autopct="%1.1f%%", startangle=90,
         colors=colors, pctdistance=0.8
@@ -175,58 +113,46 @@ def probability_donut(prob_safe: float):
     st.pyplot(fig)
 
 def radar_chart_user_vs_means(input_df: pd.DataFrame):
-    if df_clean is None:
-        st.info("📁 Dataset not found for radar chart.")
-        return
-    try:
-        safe_means = df_clean[df_clean["Potability"] == 1][FEATURES].mean()
-        unsafe_means = df_clean[df_clean["Potability"] == 0][FEATURES].mean()
-        user_vals = input_df[FEATURES].iloc[0]
+    if df_clean is None: return
+    safe_means = df_clean[df_clean["Potability"] == 1][FEATURES].mean()
+    unsafe_means = df_clean[df_clean["Potability"] == 0][FEATURES].mean()
+    user_vals = input_df[FEATURES].iloc[0]
 
-        categories = FEATURES
-        N = len(categories)
+    categories = FEATURES
+    N = len(categories)
 
-        def close_loop(values):
-            return np.concatenate([values, values[:1]])
+    def close_loop(values): return np.concatenate([values, values[:1]])
 
-        combined = pd.DataFrame({
-            "user": user_vals,
-            "safe": safe_means,
-            "unsafe": unsafe_means
-        })
-        vmax = combined.abs().max(axis=1).replace(0, 1e-9)
-        norm = combined.divide(vmax, axis=0).T
+    combined = pd.DataFrame({
+        "user": user_vals,
+        "safe": safe_means,
+        "unsafe": unsafe_means
+    })
+    vmax = combined.abs().max(axis=1).replace(0, 1e-9)
+    norm = combined.divide(vmax, axis=0).T
 
-        values_user = norm.loc["user"].values
-        values_safe = norm.loc["safe"].values
-        values_unsafe = norm.loc["unsafe"].values
+    values_user = norm.loc["user"].values
+    values_safe = norm.loc["safe"].values
+    values_unsafe = norm.loc["unsafe"].values
 
-        angles = np.linspace(0, 2 * np.pi, N, endpoint=False).tolist()
-        angles += angles[:1]
+    angles = np.linspace(0, 2 * np.pi, N, endpoint=False).tolist()
+    angles += angles[:1]
 
-        fig, ax = plt.subplots(subplot_kw=dict(polar=True), figsize=(7, 7))
-        ax.plot(angles, close_loop(values_user), linewidth=2, label="User", color="#2196F3")
-        ax.fill(angles, close_loop(values_user), alpha=0.1, color="#2196F3")
+    fig, ax = plt.subplots(subplot_kw=dict(polar=True), figsize=(5, 5))
+    ax.plot(angles, close_loop(values_user), linewidth=2, label="User", color="#2196F3")
+    ax.fill(angles, close_loop(values_user), alpha=0.1, color="#2196F3")
+    ax.plot(angles, close_loop(values_safe), linewidth=2, label="Safe Mean", color=SAFE_COLOR)
+    ax.fill(angles, close_loop(values_safe), alpha=0.1, color=SAFE_COLOR)
+    ax.plot(angles, close_loop(values_unsafe), linewidth=2, label="Unsafe Mean", color=UNSAFE_COLOR)
+    ax.fill(angles, close_loop(values_unsafe), alpha=0.1, color=UNSAFE_COLOR)
 
-        ax.plot(angles, close_loop(values_safe), linewidth=2, label="Safe Mean", color=SAFE_COLOR)
-        ax.fill(angles, close_loop(values_safe), alpha=0.1, color=SAFE_COLOR)
+    ax.set_xticks(angles[:-1])
+    ax.set_xticklabels(categories)
+    ax.set_yticklabels([])
+    ax.set_title("Your Input vs Safe/Unsafe Means")
+    ax.legend(loc="upper right", bbox_to_anchor=(1.2, 1.1))
+    st.pyplot(fig)
 
-        ax.plot(angles, close_loop(values_unsafe), linewidth=2, label="Unsafe Mean", color=UNSAFE_COLOR)
-        ax.fill(angles, close_loop(values_unsafe), alpha=0.1, color=UNSAFE_COLOR)
-
-        ax.set_xticks(angles[:-1])
-        ax.set_xticklabels(categories)
-        ax.set_yticklabels([])
-        ax.set_title("Your Input vs Safe/Unsafe Means (normalized)")
-        ax.legend(loc="upper right", bbox_to_anchor=(1.3, 1.1))
-        st.pyplot(fig)
-    except Exception as e:
-        st.info("⚠️ Could not render radar chart.")
-        st.caption(f"Details: {e}")
-
-# -------------------------------
-# Session state for History
-# -------------------------------
 if "history" not in st.session_state:
     st.session_state.history = []
 
@@ -234,9 +160,6 @@ def add_history(row: dict, max_len=20):
     st.session_state.history.insert(0, row)
     st.session_state.history = st.session_state.history[:max_len]
 
-# -------------------------------
-# Sidebar
-# -------------------------------
 st.sidebar.header("⚙️ Settings")
 threshold = st.sidebar.slider("Safe/Unsafe threshold", 0.0, 1.0, 0.30, 0.01)
 st.sidebar.caption("Decision boundary for classifying Safe (1).")
@@ -245,22 +168,16 @@ st.sidebar.header("ℹ️ About AquaCheck")
 st.sidebar.markdown(
     """
 - **Model:** Random Forest (SMOTE + Calibration)  
-- **Explainability:** SHAP on base Random Forest  
-- **UI:** Tabs, probability donut, radar chart, history  
-- **Note:** WHO tooltips on inputs
+- **Explainability:** Feature Importances  
+- **UI:** Tabs, donut, radar chart, history  
+- **Note:** WHO tooltips included
 """
 )
 
-# -------------------------------
-# Tabs
-# -------------------------------
 tab_pred, tab_explain, tab_insights = st.tabs(
     ["🔮 Prediction", "🧠 Explainability", "📈 Dataset Insights"]
 )
 
-# -------------------------------
-# PREDICTION TAB
-# -------------------------------
 with tab_pred:
     st.subheader("🧪 Enter Water Quality Parameters")
     c1, c2, c3 = st.columns(3)
@@ -289,51 +206,18 @@ with tab_pred:
         risk = prob_to_risk(prob_safe)
 
         if pred == 1:
-            st.markdown(
-                f"""
-                <div class='result-card safe'>
-                    ✅ Safe to Drink <br>
-                    <div class='score'>Risk Score: {risk}/100</div>
-                    Confidence (Safe): {prob_safe*100:.2f}%
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
+            st.markdown(f"<div class='result-card safe'>✅ Safe to Drink<br><div class='score'>Risk Score: {risk}/100</div>Confidence (Safe): {prob_safe*100:.2f}%</div>", unsafe_allow_html=True)
         else:
-            st.markdown(
-                f"""
-                <div class='result-card unsafe'>
-                    ⚠️ Unsafe to Drink <br>
-                    <div class='score'>Risk Score: {risk}/100</div>
-                    Confidence (Unsafe): {(1 - prob_safe)*100:.2f}%
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
+            st.markdown(f"<div class='result-card unsafe'>⚠️ Unsafe to Drink<br><div class='score'>Risk Score: {risk}/100</div>Confidence (Unsafe): {(1 - prob_safe)*100:.2f}%</div>", unsafe_allow_html=True)
 
         probability_donut(prob_safe)
-        st.markdown("### 🕸️ Your Input vs Class Means (Radar)")
         radar_chart_user_vs_means(input_df)
-        st.markdown("### 🔬 Local Feature Contributions")
-        if explain_model is not None:
-            shap_local_bar(explain_model, input_df)
-        else:
-            st.info("Add `models/best_rf.pkl` to enable SHAP local explanations.")
 
         add_history({
-            "pH": ph,
-            "Hardness": hardness,
-            "Solids": solids,
-            "Chloramines": chloramines,
-            "Sulfate": sulfate,
-            "Conductivity": conductivity,
-            "Organic Carbon": organic_carbon,
-            "Trihalomethanes": trihalomethanes,
-            "Turbidity": turbidity,
-            "Prob_Safe": round(prob_safe, 4),
-            "Pred": pred,
-            "Threshold": threshold,
-            "RiskScore": risk
+            "pH": ph, "Hardness": hardness, "Solids": solids, "Chloramines": chloramines,
+            "Sulfate": sulfate, "Conductivity": conductivity, "Organic Carbon": organic_carbon,
+            "Trihalomethanes": trihalomethanes, "Turbidity": turbidity,
+            "Prob_Safe": round(prob_safe, 4), "Pred": pred, "Threshold": threshold, "RiskScore": risk
         })
 
     st.markdown("---")
@@ -344,49 +228,21 @@ with tab_pred:
         hist_df = pd.DataFrame(st.session_state.history)
         st.dataframe(hist_df)
 
-# -------------------------------
-# EXPLAINABILITY TAB
-# -------------------------------
 with tab_explain:
     st.subheader("🧠 Global Explainability")
-    if explain_model is not None:
-        try:
-            importances = pd.Series(explain_model.feature_importances_, index=FEATURES).sort_values(ascending=True)
-            fig, ax = plt.subplots(figsize=(7, 5))
-            importances.plot(kind="barh", ax=ax, color="#607D8B")
-            ax.set_title("Random Forest Feature Importances (Global)")
-            st.pyplot(fig)
-        except Exception as e:
-            st.info("⚠️ Could not compute global feature importances.")
-            st.caption(f"Details: {e}")
-        if df_clean is not None:
-            st.markdown("#### SHAP Summary (sample)")
-            try:
-                sample = df_clean.sample(min(300, len(df_clean)), random_state=42)[FEATURES]
-                explainer = shap.TreeExplainer(explain_model)
-                shap_values = explainer.shap_values(sample)
-                if isinstance(shap_values, list):
-                    sv = shap_values[1]
-                else:
-                    sv = shap_values
-                plt.figure()
-                shap.summary_plot(sv, sample, feature_names=FEATURES, show=False)
-                st.pyplot(plt.gcf())
-            except Exception as e:
-                st.info("⚠️ SHAP summary could not be rendered.")
-                st.caption(f"Details: {e}")
-        else:
-            st.caption("Load `data/water_potability_clean.csv` to enable SHAP summary on dataset.")
-    else:
-        st.info("Add `models/best_rf.pkl` to enable explainability.")
+    try:
+        importances = pd.Series(model.feature_importances_, index=FEATURES).sort_values(ascending=True)
+        fig, ax = plt.subplots(figsize=(6, 4))
+        importances.plot(kind="barh", ax=ax, color="#607D8B")
+        ax.set_title("Random Forest Feature Importances")
+        st.pyplot(fig)
+    except:
+        st.info("⚠️ Could not compute feature importances.")
 
-# -------------------------------
-# DATASET INSIGHTS TAB
-# -------------------------------
 with tab_insights:
     st.subheader("📈 Dataset Insights")
     if df_clean is None:
-        st.info("Please add `data/water_potability_clean.csv` to see dataset insights.")
+        st.info("Please add dataset at `data/water_potability_clean.csv`")
     else:
         counts = df_clean["Potability"].value_counts().sort_index()
         labels = ["Unsafe (0)", "Safe (1)"]
@@ -401,9 +257,9 @@ with tab_insights:
 
         try:
             import seaborn as sns
-            fig, ax = plt.subplots(figsize=(8, 6))
+            fig, ax = plt.subplots(figsize=(6, 5))
             sns.heatmap(df_clean[FEATURES].corr(), annot=True, fmt=".2f", cmap="coolwarm", ax=ax)
             ax.set_title("Feature Correlation Heatmap")
             st.pyplot(fig)
-        except Exception as e:
-            st.caption(f"Heatmap not available: {e}")
+        except:
+            st.caption("Heatmap not available.")
